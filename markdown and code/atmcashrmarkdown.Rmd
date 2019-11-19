@@ -1,0 +1,323 @@
+---
+title: "ATM Cash Management"
+runtime: shiny
+output:
+  html_document:
+    df_print: paged
+  flexdashboard::flex_dashboard:
+    image: ''
+    orientation: rows
+    theme: united
+    vertical_layout: fill
+---
+```{r, out.width = "200px",echo = FALSE}
+knitr::include_graphics("https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcQOWG2iTW3emgf0SVLiME7WpcunphMFZVWrHLhTSIa7IqTraaEJhQ")
+
+```
+
+
+```{r,include = FALSE,message = FALSE}
+
+library(ECharts2Shiny)
+library(shiny)
+library(magrittr)
+library(pracma)
+library(rbokeh)
+library(readr)
+library(flexdashboard)
+library(stats)
+```
+
+```{r,include = FALSE,message = FALSE}
+
+setwd("~/FOLDER_NAME")
+library(readr)
+data <- read_delim("~/FOLDER_NAME/atm_data_m2.csv", ";", 
+    escape_double = FALSE, trim_ws = TRUE)
+
+
+library(readxl)
+Date <- read_excel("~/FOLDER_NAME/Date.xlsx", 
+                   col_names = FALSE, col_types = c("date", 
+                                                    "text"))
+```
+
+```{r,include = FALSE,message = FALSE}
+
+#head(atm_data_m2)
+#data<-atm_data_m2
+colnames(Date)<-c("Date","DayofWeek")
+data<-data.frame(data,Date)
+data<-data[-c(1,3,7,8,9)]
+
+```
+
+
+```{r,include = FALSE,message = FALSE}
+
+#summary(data)
+
+#table(data$atm_name)
+#table(data$DayofWeek)
+
+#table(data$festival_religion)
+#table(data$working_day)
+
+workingday<-matrix(,nrow(data),ncol=1)
+
+for(i in 1:nrow(data)){
+  if(data$DayofWeek[i]=="MONDAY"){
+     workingday[i]<-"W"
+  }
+  else if (data$DayofWeek[i]=="TUESDAY"){
+    workingday[i]<-"W"
+  }
+  else if (data$DayofWeek[i]=="WEDNESDAY"){
+    workingday[i]<-"W"
+  }
+  else if (data$DayofWeek[i]=="THURSDAY"){
+    workingday[i]<-"W"
+  }
+  else if (data$DayofWeek[i]=="FRIDAY"){
+    workingday[i]<-"W"
+  }
+  else if (data$DayofWeek[i]=="SATURDAY"){
+    workingday[i]<-"H"
+  }
+  else if (data$DayofWeek[i]=="SUNDAY"){
+    workingday[i]<-"H"
+  }
+}
+
+data$working_day<-workingday
+##adding time series lags
+library(Hmisc)
+lag1 <- Lag(data$total_amount_withdrawn,shift = 1)
+data<- cbind(data,lag1)
+
+lag2 <- Lag(data$total_amount_withdrawn,shift = 2)
+data<- cbind(data,lag2)
+
+lag3 <- Lag(data$total_amount_withdrawn,shift = 3)
+data<- cbind(data,lag3)
+library(dummies)
+data2<-dummy.data.frame(data,names=c("festival_religion","working_day","holiday_sequence","DayofWeek"))
+
+data2<-data2[-1]
+
+#scaling
+
+datascaling<-scale(data2[c(16,17,26,27,28)])
+
+data2$prevweek_mean<-datascaling[,1]
+data2$total_amount_withdrawn<-datascaling[,2]
+data2$lag1<-datascaling[,3]
+data2$lag2<-datascaling[,4]
+data2$lag3<-datascaling[,5]
+
+data3<-na.omit(data2)
+
+
+#correlationdata<-cor(data3[-18])
+#corrplot(correlationdata, type = "upper", order = "hclust", 
+         #tl.col = "black", tl.srt = 120,method="circle")
+
+
+library(DataExplorer)
+#plot_str(data3)
+#plot_missing(data3)
+#plot_histogram(data3)
+#plot_density(data3)
+
+#plot.ts(data3$total_amount_withdrawn)
+#ggplot(data = data3, aes(x = data3$Date, y = data3$total_amount_withdrawn ))+
+  #geom_line(color = "blue", size = 0.5)+
+  #ylim(-5,5)+
+  #xlab('Time')+
+  #ylab('Total amount of Withdrawn')
+data4<-data3
+data3<-data3[-18]
+attach(data3)
+
+#traintest split
+smp_size <- floor(0.80 * nrow(data3))
+set.seed(123)
+train_ind <- sample(seq_len(nrow(data3)), size = smp_size)
+train <- data3[train_ind, ]
+test <- data3[-train_ind, ]
+
+testx <- test[,-17]
+testy <- test[,17]
+
+#modelstepwise<-step(lm(total_amount_withdrawn~ . ,data=train),direction = "both")
+
+modellast<-(lm(total_amount_withdrawn ~ festival_religionC + festival_religionH + 
+                 festival_religionN + holiday_sequenceHHH + holiday_sequenceHHW + 
+                 holiday_sequenceHWW + holiday_sequenceWHH + holiday_sequenceWWH + 
+                 prevweek_mean + lag1 + lag2 + lag3 + DayofWeekWEDNESDAY, data=train))
+
+#summary(modellast)
+
+modelpred <- predict(modellast, test)
+
+mse <- mean((test$total_amount_withdrawn - modelpred)^2)
+
+mape<- (sum(((abs(test$total_amount_withdrawn - modelpred))/test$total_amount_withdrawn))/nrow(test))
+success<-(1-mape)
+
+```
+ 
+ 
+
+
+```{r,include = FALSE,message = FALSE}
+#function used for scoring
+scoreProperty <- function (FestivalReligionC,FestivalReligionH,FestivalReligionN,HolSeqHHH,HolSeqHHW,HolSeqHWW,
+                           HolSeqWHH,HolSeqWWH,PrevWeekMean,Lg1,Lg2,Lg3,DayWednesday){
+  
+    b0 = 0.07181
+    b1 = -0.37239
+    b2 = -0.35230
+    b3 = -0.18091
+    b4 = -0.37965
+    b5 = -0.39035
+    b6 = 0.14630
+    b7 = 0.19195
+    b8 = -0.15577
+    b9 = 0.16813
+    b10 = 0.27488
+    b11 = 0.24403
+    b12 = 0.10758
+    b13 = 0.06978
+    
+  
+    festival_religionC<-FestivalReligionC
+    x1<-FestivalReligionC
+    
+    festival_religionH<-FestivalReligionH
+    x2<-FestivalReligionH
+    
+    festival_religionN<-FestivalReligionN
+    x3<-FestivalReligionN
+    
+    holiday_sequenceHHH<-HolSeqHHH
+    x4<-holiday_sequenceHHH
+    
+    holiday_sequenceHHW<-HolSeqHHW
+    x5<-holiday_sequenceHHW
+    
+    holiday_sequenceHWW<-HolSeqHWW
+    x6<-holiday_sequenceHWW
+    
+    holiday_sequenceWHH<-HolSeqWHH
+    x7<-holiday_sequenceWHH
+    
+    holiday_sequenceWWH<-HolSeqWWH
+    x8<-holiday_sequenceWWH
+    
+    prevweek_mean<-PrevWeekMean
+    x9<-prevweek_mean
+    
+    data3$lag1<-Lg1
+    x10<-data3$lag1
+    
+    data3$lag2<-Lg2
+    x11<-data3$lag2
+    
+    data3$lag3<-Lg3
+    x12<-data3$lag3
+    
+    DayofWeekWEDNESDAY<-DayWednesday
+    x13<-DayofWeekWEDNESDAY
+    
+
+TotalAmount <- (b0+b1*x1+b2*x2+b3*x3+b4*x4+b5*x5+b6*x6+b7*x7+b8*x8+b9*x9+b10*x10+b11*x11+b12*x12+b13*x13) 
+
+  return(TotalAmount)    
+
+
+}
+
+```
+
+
+Predictive Model
+=====================================
+-----------------------------------------------------------------------
+
+
+```{r,echo = FALSE}
+
+#coefficient 2 - Birim_Fiyat
+sliderInput("FestivalReligionC", "Festival Religion C:",
+            min =0, max = 1, value = 0 , step = 1)
+
+sliderInput("FestivalReligionH", "Festival Religion H:",
+            min = 0, max = 1,  value = 0 , step = 1)
+
+sliderInput("FestivalReligionN", "Festival Religion N:",
+            min = 0, max = 1,  value = 0 , step = 1)
+
+sliderInput("HolSeqHHH", "HHH:",
+            min = 0, max = 1 , value = 0 , step = 1)
+
+sliderInput("HolSeqHHW", "HHW:",
+            min = 0, max = 1,  value = 0 , step = 1)
+
+sliderInput("HolSeqHWW", "HWW:",
+            min = 0, max = 1,  value = 0 , step = 1)
+
+sliderInput("HolSeqWHH", "WHH:",
+            min = 0, max = 1,  value = 0 , step = 1)
+
+sliderInput("HolSeqWWH", "WWH:",
+            min = 0, max = 1,  value = 0 , step = 1)
+
+sliderInput("PrevWeekMean", "PrevWeekofMean:",
+            min = -2.65, max = 2.54,  value = 0 , step = 0.1)
+
+sliderInput("Lg1", "Lag1:",
+            min = -2.02, max = 3.50 ,  value = 0 , step = 0.1)
+sliderInput("Lg2", "Lag2:",
+            min = -2.02, max = 3.50 ,  value = 0 , step = 0.1)
+sliderInput("Lg3", "Lag3:",
+            min = -2.02, max = 3.50 ,  value = 0 , step = 0.1)
+sliderInput("DayWednesday", "Wednesday:",
+            min = 0, max = 1 ,  value = 0 , step = 1)
+
+score <- reactive({
+  scoreProperty(input$FestivalReligionC,input$FestivalReligionH,input$FestivalReligionN,input$HolSeqHHH,input$HolSeqHHW                 ,input$HolSeqHWW,input$HolSeqWHH,input$HolSeqWWH,input$PrevWeekMean,input$Lg1,
+                input$Lg2,input$Lg3,input$DayWednesday)
+  })
+
+```
+
+
+```{r,echo = FALSE}
+renderGauge({
+  Totalamount<- score()[1]
+  gauge(Totalamount, min = -5, max = 5, gaugeSectors(
+  success =c(3,5)))
+  
+})
+
+```
+
+------------------
+
+```{r,echo = FALSE}
+ggplot(data = data3, aes(x = data4$Date, y = data3$total_amount_withdrawn ))+
+  geom_line(color = "palevioletred4" , size = 0.5)+
+  ylim(-5,5)+
+  xlab('Time')+
+  ylab('Total amount of Withdrawn')
+
+```
+
+
+
+
+
+
+
+
